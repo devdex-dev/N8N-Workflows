@@ -1,0 +1,453 @@
+{
+  "name": "Real Estate Lead Capture v1.2 [Free-Tier Compatible]",
+  "nodes": [
+
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "real-estate-lead",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook",
+      "name": "Webhook — Lead Intake",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [80, 300],
+      "webhookId": "real-estate-lead-intake",
+      "notes": "POST endpoint. Connect website forms, landing pages, or Facebook Lead Ads here."
+    },
+
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"received\", \"message\": \"Lead is being processed.\" }",
+        "options": { "responseCode": 200 }
+      },
+      "id": "node-respond-ack",
+      "name": "Respond 200 OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [280, 160]
+    },
+
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// ✏️  CONFIG — Edit these values before activating\n// ============================================================\nconst CONFIG = {\n  SHEETS_DOC_ID:        'YOUR_GOOGLE_SHEET_DOC_ID_HERE',\n  SLACK_LEADS_CHANNEL:  'YOUR_SLACK_LEADS_CHANNEL_ID',\n  SLACK_ALERTS_CHANNEL: 'YOUR_SLACK_ALERTS_CHANNEL_ID'\n};\n// ============================================================\n\nreturn [{ json: CONFIG }];"
+      },
+      "id": "node-config",
+      "name": "⚙️ Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [280, 300],
+      "notes": "FREE-TIER FIX: Edit SHEETS_DOC_ID, SLACK_LEADS_CHANNEL, SLACK_ALERTS_CHANNEL directly in this node. No Variables feature needed."
+    },
+
+    {
+      "parameters": {
+        "jsCode": "const body = $('Webhook — Lead Intake').first().json.body\n           || $('Webhook — Lead Intake').first().json;\n\nconst raw = {\n  full_name:          (body.full_name || body.name || '').trim(),\n  email:              (body.email || '').trim().toLowerCase(),\n  phone:              (body.phone || body.phone_number || '').trim(),\n  property_type:      (body.property_type || body.propertyType || 'Unknown').trim(),\n  preferred_location: (body.preferred_location || body.location || 'Not specified').trim(),\n  budget:             (body.budget || body.budget_range || '').toString().trim(),\n  message:            (body.message || body.notes || '').trim(),\n  source:             (body.source || 'webhook').trim()\n};\n\nconst errors = [];\nif (!raw.full_name)              errors.push('full_name is required');\nif (!raw.email && !raw.phone)   errors.push('At least one contact detail (email or phone) is required');\n\nif (errors.length > 0) {\n  return [{ json: { valid: false, errors, raw } }];\n}\n\n// Normalize phone\nlet phone = raw.phone.replace(/[^\\d+]/g, '');\nif (phone && !phone.startsWith('+')) phone = '+' + phone;\n\n// Budget tagging\nlet budgetTag = 'Unknown';\nconst budgetNum = parseFloat(raw.budget.replace(/[^0-9.]/g, ''));\nif (!isNaN(budgetNum)) {\n  if (budgetNum < 3000000)       budgetTag = 'Low (< ₱3M)';\n  else if (budgetNum < 8000000)  budgetTag = 'Mid (₱3M–₱8M)';\n  else if (budgetNum < 20000000) budgetTag = 'High (₱8M–₱20M)';\n  else                           budgetTag = 'Premium (₱20M+)';\n} else if (raw.budget) {\n  budgetTag = raw.budget;\n}\n\nconst timestamp = new Date().toISOString();\n\nreturn [{\n  json: {\n    valid: true,\n    timestamp,\n    full_name:          raw.full_name,\n    email:              raw.email,\n    phone,\n    property_type:      raw.property_type,\n    preferred_location: raw.preferred_location,\n    budget:             raw.budget,\n    budget_tag:         budgetTag,\n    message:            raw.message,\n    source:             raw.source,\n    status:             'New'\n  }\n}];"
+      },
+      "id": "node-validate",
+      "name": "Validate & Normalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false },
+          "conditions": [
+            {
+              "id": "is-valid",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-valid-gate",
+      "name": "Is Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('⚙️ Config').first().json.SHEETS_DOC_ID }}",
+          "mode": "id"
+        },
+        "sheetName": { "__rl": true, "value": "Leads", "mode": "name" },
+        "options": { "returnAllMatches": true }
+      },
+      "id": "node-sheets-read",
+      "name": "Google Sheets — Read All",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [880, 240],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-cred",
+          "name": "Google Sheets"
+        }
+      }
+    },
+
+    {
+      "parameters": {
+        "jsCode": "const lead = $('Validate & Normalize').first().json;\nconst rows  = $input.all().map(r => r.json);\n\nconst incomingEmail = (lead.email || '').toLowerCase().trim();\nconst incomingPhone = (lead.phone || '').replace(/\\D/g, '');\n\nconst duplicate = rows.find(row => {\n  const rowEmail = (row.Email || '').toLowerCase().trim();\n  const rowPhone = (row.Phone || '').replace(/\\D/g, '');\n  return (\n    (incomingEmail && rowEmail === incomingEmail) ||\n    (incomingPhone.length >= 7 && rowPhone === incomingPhone)\n  );\n});\n\nreturn [{ json: {\n  ...lead,\n  is_duplicate:  !!duplicate,\n  duplicate_row: duplicate || null\n}}];"
+      },
+      "id": "node-dedup",
+      "name": "Deduplication Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1080, 240]
+    },
+
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false },
+          "conditions": [
+            {
+              "id": "not-dup",
+              "leftValue": "={{ $json.is_duplicate }}",
+              "rightValue": false,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-dup-gate",
+      "name": "Is Duplicate?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1280, 240]
+    },
+
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('⚙️ Config').first().json.SHEETS_DOC_ID }}",
+          "mode": "id"
+        },
+        "sheetName": { "__rl": true, "value": "Leads", "mode": "name" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp":          "={{ $json.timestamp }}",
+            "Full Name":          "={{ $json.full_name }}",
+            "Email":              "={{ $json.email }}",
+            "Phone":              "={{ $json.phone }}",
+            "Property Type":      "={{ $json.property_type }}",
+            "Preferred Location": "={{ $json.preferred_location }}",
+            "Budget":             "={{ $json.budget }}",
+            "Budget Tag":         "={{ $json.budget_tag }}",
+            "Source":             "={{ $json.source }}",
+            "Message":            "={{ $json.message }}",
+            "Status":             "New",
+            "Notes":              ""
+          }
+        },
+        "options": { "valueInputMode": "USER_ENTERED" }
+      },
+      "id": "node-sheets-append",
+      "name": "Google Sheets — Append New Lead",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [1480, 160],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-cred",
+          "name": "Google Sheets"
+        }
+      }
+    },
+
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $('⚙️ Config').first().json.SHEETS_DOC_ID }}",
+          "mode": "id"
+        },
+        "sheetName": { "__rl": true, "value": "Duplicates", "mode": "name" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp":    "={{ $json.timestamp }}",
+            "Full Name":    "={{ $json.full_name }}",
+            "Email":        "={{ $json.email }}",
+            "Phone":        "={{ $json.phone }}",
+            "Source":       "={{ $json.source }}",
+            "Budget":       "={{ $json.budget }}",
+            "Duplicate Of": "={{ $json.duplicate_row?.Email || $json.duplicate_row?.Phone || 'Unknown' }}",
+            "Notes":        "Auto-flagged duplicate"
+          }
+        },
+        "options": { "valueInputMode": "USER_ENTERED" }
+      },
+      "id": "node-sheets-dup",
+      "name": "Google Sheets — Log Duplicate",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [1480, 340],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-cred",
+          "name": "Google Sheets"
+        }
+      }
+    },
+
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $('⚙️ Config').first().json.SLACK_LEADS_CHANNEL }}",
+          "mode": "id"
+        },
+        "messageType": "block",
+        "blocksUi": {
+          "blocksValues": [
+            {
+              "type": "header",
+              "text": { "type": "plain_text", "text": "🏡 New Real Estate Lead!" }
+            },
+            {
+              "type": "section",
+              "fields": [
+                { "type": "mrkdwn", "text": "*Name:*\n={{ $('Deduplication Check').first().json.full_name }}" },
+                { "type": "mrkdwn", "text": "*Source:*\n={{ $('Deduplication Check').first().json.source }}" },
+                { "type": "mrkdwn", "text": "*Email:*\n={{ $('Deduplication Check').first().json.email || '_Not provided_' }}" },
+                { "type": "mrkdwn", "text": "*Phone:*\n={{ $('Deduplication Check').first().json.phone || '_Not provided_' }}" },
+                { "type": "mrkdwn", "text": "*Property:*\n={{ $('Deduplication Check').first().json.property_type }}" },
+                { "type": "mrkdwn", "text": "*Location:*\n={{ $('Deduplication Check').first().json.preferred_location }}" },
+                { "type": "mrkdwn", "text": "*Budget:*\n={{ $('Deduplication Check').first().json.budget }}" },
+                { "type": "mrkdwn", "text": "*Budget Tag:*\n={{ $('Deduplication Check').first().json.budget_tag }}" }
+              ]
+            },
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": "*Message:*\n_={{ $('Deduplication Check').first().json.message || 'No message provided.' }}_"
+              }
+            },
+            {
+              "type": "context",
+              "elements": [
+                {
+                  "type": "mrkdwn",
+                  "text": "⏱ Received: ={{ $('Deduplication Check').first().json.timestamp }} | Status: *New*"
+                }
+              ]
+            },
+            {
+              "type": "actions",
+              "elements": [
+                {
+                  "type": "button",
+                  "text": { "type": "plain_text", "text": "📋 Open CRM Sheet" },
+                  "url": "=https://docs.google.com/spreadsheets/d/{{ $('⚙️ Config').first().json.SHEETS_DOC_ID }}"
+                }
+              ]
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-slack-new",
+      "name": "Slack — New Lead Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [1680, 160],
+      "credentials": {
+        "slackApi": { "id": "slack-cred", "name": "Slack" }
+      }
+    },
+
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $('⚙️ Config').first().json.SLACK_LEADS_CHANNEL }}",
+          "mode": "id"
+        },
+        "messageType": "block",
+        "blocksUi": {
+          "blocksValues": [
+            {
+              "type": "header",
+              "text": { "type": "plain_text", "text": "⚠️ Duplicate Lead Detected" }
+            },
+            {
+              "type": "section",
+              "fields": [
+                { "type": "mrkdwn", "text": "*Name:*\n={{ $json.full_name }}" },
+                { "type": "mrkdwn", "text": "*Email:*\n={{ $json.email || '_n/a_' }}" },
+                { "type": "mrkdwn", "text": "*Phone:*\n={{ $json.phone || '_n/a_' }}" },
+                { "type": "mrkdwn", "text": "*Source:*\n={{ $json.source }}" }
+              ]
+            },
+            {
+              "type": "context",
+              "elements": [
+                { "type": "mrkdwn", "text": "ℹ️ Already in CRM. Logged to *Duplicates* sheet." }
+              ]
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-slack-dup",
+      "name": "Slack — Duplicate Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [1680, 340],
+      "credentials": {
+        "slackApi": { "id": "slack-cred", "name": "Slack" }
+      }
+    },
+
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $('⚙️ Config').first().json.SLACK_ALERTS_CHANNEL }}",
+          "mode": "id"
+        },
+        "text": "=❌ *Lead Validation Failed*\n\nErrors: {{ $json.errors.join(', ') }}\n\nRaw payload:\n```{{ JSON.stringify($json.raw, null, 2) }}```",
+        "options": {}
+      },
+      "id": "node-slack-error",
+      "name": "Slack — Validation Error",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [880, 440],
+      "credentials": {
+        "slackApi": { "id": "slack-cred", "name": "Slack" }
+      }
+    },
+
+    {
+      "parameters": {
+        "jsCode": "const err = $input.first().json;\nconsole.error('LEAD PIPELINE ERROR:', JSON.stringify(err, null, 2));\nreturn [{ json: { logged: true, error: err } }];"
+      },
+      "id": "node-error-logger",
+      "name": "Error Logger",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1680, 500]
+    }
+
+  ],
+
+  "connections": {
+    "Webhook — Lead Intake": {
+      "main": [[
+        { "node": "Respond 200 OK",  "type": "main", "index": 0 },
+        { "node": "⚙️ Config",       "type": "main", "index": 0 }
+      ]]
+    },
+    "⚙️ Config": {
+      "main": [[
+        { "node": "Validate & Normalize", "type": "main", "index": 0 }
+      ]]
+    },
+    "Validate & Normalize": {
+      "main": [[
+        { "node": "Is Valid?", "type": "main", "index": 0 }
+      ]]
+    },
+    "Is Valid?": {
+      "main": [
+        [{ "node": "Google Sheets — Read All",   "type": "main", "index": 0 }],
+        [{ "node": "Slack — Validation Error",   "type": "main", "index": 0 }]
+      ]
+    },
+    "Google Sheets — Read All": {
+      "main": [[{ "node": "Deduplication Check", "type": "main", "index": 0 }]]
+    },
+    "Deduplication Check": {
+      "main": [[{ "node": "Is Duplicate?", "type": "main", "index": 0 }]]
+    },
+    "Is Duplicate?": {
+      "main": [
+        [{ "node": "Google Sheets — Append New Lead", "type": "main", "index": 0 }],
+        [{ "node": "Google Sheets — Log Duplicate",   "type": "main", "index": 0 }]
+      ]
+    },
+    "Google Sheets — Append New Lead": {
+      "main": [[{ "node": "Slack — New Lead Alert", "type": "main", "index": 0 }]]
+    },
+    "Google Sheets — Log Duplicate": {
+      "main": [[{ "node": "Slack — Duplicate Alert", "type": "main", "index": 0 }]]
+    }
+  },
+
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": ["real-estate", "lead-capture", "crm", "google-sheets", "slack", "free-tier"],
+  "meta": { "templateCredsSetupCompleted": false },
+  "pinData": {},
+
+  "_readme": {
+    "free_tier_note": "Uses a Config code node instead of n8n Variables. No paid plan required.",
+    "config_node_fields": {
+      "SHEETS_DOC_ID":        "Google Sheets document ID — found in the sheet URL between /d/ and /edit",
+      "SLACK_LEADS_CHANNEL":  "Slack channel ID (right-click channel > Copy link > last segment)",
+      "SLACK_ALERTS_CHANNEL": "Slack channel ID for error alerts"
+    },
+    "webhook_url": "POST https://<your-n8n-host>/webhook/real-estate-lead",
+    "sample_payload": {
+      "full_name": "Maria Santos",
+      "email": "maria.santos@email.com",
+      "phone": "09171234567",
+      "property_type": "2BR Condo",
+      "preferred_location": "BGC, Taguig",
+      "budget": "6500000",
+      "message": "Looking for RFO unit near transit.",
+      "source": "Facebook Lead Ad"
+    },
+    "google_sheets_tabs": {
+      "Leads":      ["Timestamp","Full Name","Email","Phone","Property Type","Preferred Location","Budget","Budget Tag","Source","Message","Status","Notes"],
+      "Duplicates": ["Timestamp","Full Name","Email","Phone","Source","Budget","Duplicate Of","Notes"]
+    },
+    "required_credentials": {
+      "Google Sheets": "OAuth2 or Service Account — name it exactly 'Google Sheets'",
+      "Slack":         "Bot Token with chat:write and channels:write scopes — name it 'Slack'"
+    },
+    "setup_steps": [
+      "1. Import this JSON: Workflows > Import from File",
+      "2. Open the '⚙️ Config' node and fill in your 3 values",
+      "3. Create Google Sheet with 'Leads' and 'Duplicates' tabs using the schemas above",
+      "4. Add Google Sheets + Slack credentials",
+      "5. Test with the sample payload via manual execution",
+      "6. Activate the workflow"
+    ]
+  }
+}
