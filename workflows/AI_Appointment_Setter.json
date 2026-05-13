@@ -1,0 +1,280 @@
+{
+  "name": "AI Appointment Setter[unstable]",
+  "nodes": [
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "You are an AI Appointment Setter Assistant for a business. Your task is to help clients schedule appointments efficiently and professionally. Follow these steps:\n\nCollect Client Information: Ask the client for their full name, email address, and desired date and time for the appointment.\n\n1. Verify Availability: Check the requested date and time against the business calendar.\n2. Business hours are 8:00 AM to 5:00 PM.\n\nHandle Conflicts:\n\n1. If the requested slot is unavailable, suggest the next available slot 1 hour after the existing appointment.\n2. Present the alternative to the client and wait for their confirmation before proceeding.\n\nConfirm and Save:\n\n1. If the requested slot is available, confirm with the client.\n2. Once the client confirms, save the appointment and client email to the calendar.\n\nCommunication: Always communicate politely and clearly, ensuring the client understands the options, confirmation process, and that their email will be used for appointment notifications.",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        288,
+        -112
+      ],
+      "id": "1ee49d7b-e55e-4e52-b7c5-dd2806fa524a",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4.1-mini"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        112,
+        112
+      ],
+      "id": "f2657412-0666-491a-aa6c-df75089921ce",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "azEylIdmR5lfKatT",
+          "name": "n8n free OpenAI API credits"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.message.chat.id }}",
+        "contextWindowLength": 20
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        272,
+        112
+      ],
+      "id": "eec62262-b0a3-49d3-b5ba-b7940068b62d",
+      "name": "Simple Memory"
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Get an event in Google Calendar extracted from the conversation with the customer.",
+        "resource": "calendar",
+        "calendar": {
+          "__rl": true,
+          "value": "dexdecierdo@gmail.com",
+          "mode": "list",
+          "cachedResultName": "dexdecierdo@gmail.com"
+        },
+        "timeMin": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Start_Time', ``, 'string') }}",
+        "timeMax": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('End_Time', ``, 'string') }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "typeVersion": 1.3,
+      "position": [
+        416,
+        112
+      ],
+      "id": "8a840d91-d3fc-4bd2-ba63-986fc72f8c15",
+      "name": "Get availability in a calendar in Google Calendar",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "X1GBAQ8wkAKDpJy4",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Create an event in Google Calendar, based from the extracted data from conversation with the client",
+        "calendar": {
+          "__rl": true,
+          "value": "dexdecierdo@gmail.com",
+          "mode": "list",
+          "cachedResultName": "dexdecierdo@gmail.com"
+        },
+        "start": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Start', ``, 'string') }}",
+        "end": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('End', ``, 'string') }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "typeVersion": 1.3,
+      "position": [
+        576,
+        112
+      ],
+      "id": "ed911d69-47c3-4bcc-ba99-7b58c1f57fba",
+      "name": "Create an event in Google Calendar",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "X1GBAQ8wkAKDpJy4",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -64,
+        -112
+      ],
+      "id": "4e4ac59d-ff62-42c4-8f0e-df273e5b84ce",
+      "name": "Telegram Trigger",
+      "webhookId": "a36648f1-1473-4197-b6ad-0ad859ee2628",
+      "credentials": {
+        "telegramApi": {
+          "id": "CbRaLusg0suAlsTM",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C0AAMV7KG2F",
+          "mode": "list",
+          "cachedResultName": "all-n8n-marketing-team"
+        },
+        "text": "NEw",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.4,
+      "position": [
+        752,
+        -112
+      ],
+      "id": "b58076f1-c868-4af1-b5b1-6df72172ab14",
+      "name": "Send a message",
+      "webhookId": "899c1bff-340f-41b4-816d-213a223d77d6",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "imTGzckJuVGS9ysw",
+          "name": "Slack account"
+        }
+      }
+    }
+  ],
+  "pinData": {
+    "Telegram Trigger": [
+      {
+        "json": {
+          "update_id": 229522644,
+          "message": {
+            "message_id": 2,
+            "from": {
+              "id": 8483508216,
+              "is_bot": false,
+              "first_name": "d.exe",
+              "language_code": "en"
+            },
+            "chat": {
+              "id": 8483508216,
+              "first_name": "d.exe",
+              "type": "private"
+            },
+            "date": 1769954921,
+            "text": "Test"
+          }
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ]
+  },
+  "connections": {
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get availability in a calendar in Google Calendar": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create an event in Google Calendar": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "55e4f393-c667-4308-ba5f-774ecc0247b1",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "81cbcdc711bceceef27760bf990f944526aac3884dff4e0e061df8eeacd321cd"
+  },
+  "id": "MA1fSglvA7BZantEt-KTU",
+  "tags": []
+}
